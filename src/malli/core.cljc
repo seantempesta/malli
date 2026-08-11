@@ -2886,17 +2886,27 @@
                              'children children
                              'entries entries}}})
 
+#?(:clj
+   (defn- -loaded-qualified-value [?code]
+     (when (qualified-symbol? ?code)
+       (when-let [target-ns (some-> ?code namespace symbol find-ns)]
+         (when-let [target-var (ns-resolve target-ns (symbol (name ?code)))]
+           [@target-var])))))
+
 (let [-fail! #(-fail! ::sci-not-available {:code %})
       -eval? #(or (symbol? %) (string? %) (sequential? %))
       -evaluator (memoize ms/evaluator)]
   (defn eval
     ([?code] (eval ?code nil))
     ([?code options]
-     (cond (vector? ?code) ?code
-           (-eval? ?code) (if (::disable-sci options)
-                            (-fail! ?code)
-                            (((-evaluator (or (::sci-options options) (-default-sci-options)) -fail!)) ?code))
-           :else ?code))))
+     (let [loaded-value #?(:clj (-loaded-qualified-value ?code)
+                           :default nil)]
+       (cond (vector? ?code) ?code
+             loaded-value (first loaded-value)
+             (-eval? ?code) (if (::disable-sci options)
+                              (-fail! ?code)
+                              (((-evaluator (or (::sci-options options) (-default-sci-options)) -fail!)) ?code))
+             :else ?code)))))
 
 ;;
 ;; schema walker
