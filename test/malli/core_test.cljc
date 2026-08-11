@@ -105,6 +105,9 @@
                   [::x] nil nil)))))
 
 ;;
+(def ^:private loaded-qualified-generator
+  (gen/return :loaded-qualified-generator))
+
 (deftest eval-test
   (testing "with defaults"
     (is (= 2 ((m/eval inc) 1)))
@@ -115,6 +118,9 @@
     (is (= 2 ((m/eval "(fn [x] (inc x))") 1)))
     (is (= {:district 9} (m/eval "(m/properties [int? {:district 9}])")))
     (is (= :maybe (m/eval "(m/type [:maybe int?])")))
+    #?(:clj
+       (is (identical? loaded-qualified-generator
+                       (m/eval 'malli.core-test/loaded-qualified-generator))))
     (is (= ['int? 'string?] (map m/form (m/eval "(m/children [:or {:some \"props\"} int? string?])"))))
     (is (schema= [[:x [::m/val 'int?]] [:y [::m/val 'string?]]] (m/eval "(m/entries [:map [:x int?] [:y string?]])")))
     (is (schema= [[:x nil 'int?] [:y nil 'string?]] (m/eval "(m/children [:map [:x int?] [:y string?]])"))))
