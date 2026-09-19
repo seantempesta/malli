@@ -1941,12 +1941,11 @@
 ;; useful for detecting cycles.
 ;; copied to malli.generator
 (defn- -identify-ref-schema [schema]
-  ;; TODO mr/-schemas doesn't seem right, making defn private for now.
-  ;; e.g., we only care about property registry entries, not schema constructors.
-  ;; a better approach might be to accumulate a 'seen' map from name => ?schema
-  ;; that we add to every time we deref a ref, and if we expand the same name again
-  ;; with the same seen map, it's a cycle.
-  {:scope (-> schema -options -registry mr/-schemas)
+  ;; Registry instances carry the lookup scope, including property registries.
+  ;; Enumerating and hashing every declaration here makes each ref pay for the
+  ;; entire registry. Keep the actual scope that resolves this ref instead.
+  ;; Keep raw map registries too: -registry would wrap those afresh per call.
+  {:scope (or (-> schema -options :registry) default-registry)
    :name (-ref schema)})
 
 (def ^:dynamic ^:private *ref-validators* {})
