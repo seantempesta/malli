@@ -465,9 +465,23 @@
 
 (defn- -create-from-gen
   [props schema options]
-  (or (:gen/gen props)
-      (when-not (:gen/elements props)
-        (-generator schema options))))
+  (if-some [declared (:gen/gen props)]
+    ;; A serialized schema names its generator by symbol; resolve it as
+    ;; `:gen/fmap` is resolved. A declaration that yields no generator is
+    ;; ::no-generator, never a non-generator handed on to gen/fmap.
+    (let [gen (if (symbol? declared)
+                (try (m/eval declared options)
+                     (catch #?(:clj Exception :cljs :default) cause
+                       (throw (ex-info (str ::no-generator)
+                                       {:type ::no-generator :message ::no-generator
+                                        :data {:options options :schema schema :gen/gen declared}}
+                                       cause))))
+                declared)]
+      (if (gen/generator? gen)
+        gen
+        (m/-fail! ::no-generator {:options options :schema schema :gen/gen declared})))
+    (when-not (:gen/elements props)
+      (-generator schema options))))
 
 (defn- -create-from-schema [props options]
   (some-> (:gen/schema props) (generator options)))
