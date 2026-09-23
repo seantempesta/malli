@@ -2890,7 +2890,9 @@
      (when (qualified-symbol? ?code)
        (when-let [target-ns (some-> ?code namespace symbol find-ns)]
          (when-let [target-var (ns-resolve target-ns (symbol (name ?code)))]
-           [@target-var])))))
+           ;; A function Var is returned as the Var, which is IFn, so a
+           ;; re-evaluated defn stays live in an already compiled schema.
+           [(if (fn? @target-var) target-var @target-var)])))))
 
 (let [-fail! #(-fail! ::sci-not-available {:code %})
       -eval? #(or (symbol? %) (string? %) (sequential? %))

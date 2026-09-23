@@ -105,6 +105,8 @@
                   [::x] nil nil)))))
 
 ;;
+(defn- redefined-predicate? [x] (int? x))
+
 (def ^:private loaded-qualified-generator
   (gen/return :loaded-qualified-generator))
 
@@ -121,6 +123,12 @@
     #?(:clj
        (is (identical? loaded-qualified-generator
                        (m/eval 'malli.core-test/loaded-qualified-generator))))
+    #?(:clj
+       (let [validate (m/validator [:fn 'malli.core-test/redefined-predicate?])]
+         (is (validate 1))
+         (alter-var-root #'redefined-predicate? (constantly string?))
+         (is (not (validate 1)) "a re-evaluated predicate Var is live in a compiled validator")
+         (alter-var-root #'redefined-predicate? (constantly int?))))
     (is (= ['int? 'string?] (map m/form (m/eval "(m/children [:or {:some \"props\"} int? string?])"))))
     (is (schema= [[:x [::m/val 'int?]] [:y [::m/val 'string?]]] (m/eval "(m/entries [:map [:x int?] [:y string?]])")))
     (is (schema= [[:x nil 'int?] [:y nil 'string?]] (m/eval "(m/children [:map [:x int?] [:y string?]])"))))
