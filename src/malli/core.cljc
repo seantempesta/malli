@@ -2204,18 +2204,23 @@
                   [validate-input validate-output] (-vmap -validator [input output])
                   validate-guard (or (some-> guard -validator) any?)
                   [wrap-input wrap-output wrap-guard] (-vmap #(contains? scope %) [:input :output :guard])
-                  f (or (if gen (gen schema) f) (-fail! ::missing-function {:props props}))]
+                  f (or (if gen (gen schema) f) (-fail! ::missing-function {:props props}))
+                  ;; a throwing validator (e.g. a lazy ref that does not resolve) is reported, never f's error
+                  valid? (fn [arm validate x]
+                           (try (validate x)
+                                (catch #?(:clj Exception, :cljs :default) e
+                                  (report ::invalid-schema-at-call {:arm arm, :schema schema, :exception e}) true)))]
               (fn [& args]
                 (let [args (vec args), arity (count args)]
                   (when wrap-input
                     (when-not (<= min arity (or max miu/+max-size+))
                       (report ::invalid-arity {:arity arity, :arities #{{:min min :max max}}, :args args, :input input, :schema schema}))
-                    (when-not (validate-input args)
+                    (when-not (valid? :input validate-input args)
                       (report ::invalid-input {:input input, :args args, :schema schema})))
                   (let [value (apply f args)]
-                    (when (and wrap-output (not (validate-output value)))
+                    (when (and wrap-output (not (valid? :output validate-output value)))
                       (report ::invalid-output {:output output, :value value, :args args, :schema schema}))
-                    (when (and wrap-guard (not (validate-guard [args value])))
+                    (when (and wrap-guard (not (valid? :guard validate-guard [args value])))
                       (report ::invalid-guard {:guard guard, :value value, :args args, :schema schema}))
                     value)))))
           Cached

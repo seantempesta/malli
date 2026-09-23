@@ -2922,7 +2922,20 @@
         (is (thrown-with-msg?
              #?(:clj Exception, :cljs js/Error)
              #":malli.core/invalid-arity"
-             (pow2 100 100 100)))))))
+             (pow2 100 100 100)))))
+
+    (testing "a throwing validator is reported, a throwing function is rethrown unchanged"
+      (let [called (atom 0)
+            lazy {:registry (assoc (m/default-schemas) :lazy-ref (m/-ref-schema {:lazy true}))}
+            absent (m/-instrument {:schema [:=> [:cat [:schema [:lazy-ref ::absent]]] :int]}
+                                  (fn [x] (swap! called inc) x) lazy)
+            boom (ex-info "boom" {})
+            thrower (m/-instrument {:schema [:=> [:cat :int] :int]} (fn [_] (throw boom)))]
+        (is (= [::m/invalid-schema-at-call :input]
+               (try (absent 1) (catch #?(:clj Exception, :cljs js/Error) e
+                                 [(:type (ex-data e)) (-> e ex-data :data :arm)]))))
+        (is (= 0 @called))
+        (is (identical? boom (try (thrower 1) (catch #?(:clj Exception, :cljs js/Error) e e))))))))
 
 (deftest -safe-pred-test
   (is (true? ((m/-safe-pred (constantly "true")) ::any)))
