@@ -2931,9 +2931,10 @@
                                   (fn [x] (swap! called inc) x) lazy)
             boom (ex-info "boom" {})
             thrower (m/-instrument {:schema [:=> [:cat :int] :int]} (fn [_] (throw boom)))]
-        (is (= [::m/invalid-schema-at-call :input]
+        (is (= [::m/invalid-schema-at-call :input [1] [:cat [:schema [:ref ::absent]]]]
                (try (absent 1) (catch #?(:clj Exception, :cljs js/Error) e
-                                 [(:type (ex-data e)) (-> e ex-data :data :arm)]))))
+                                 (let [{:keys [arm args input]} (:data (ex-data e))]
+                                   [(:type (ex-data e)) arm args (m/form input)])))))
         (is (= 0 @called))
         (is (identical? boom (try (thrower 1) (catch #?(:clj Exception, :cljs js/Error) e e))))))))
 
