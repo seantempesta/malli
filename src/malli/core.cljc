@@ -1993,9 +1993,13 @@
                                                      (-validator (rf)))]
                                              (compare-and-set! knot nil f) ;; tie the knot (once), rec now callable
                                              @knot)))]
-                     (if lazy
-                       #((->validator) %)
-                       (->validator))))))
+                     (cond
+                       lazy #((->validator) %)
+                       ;; outside every knot the referenced schema's validator is a
+                       ;; function of that schema instance alone: compile it once and
+                       ;; share it with every schema that refers to it
+                       (empty? id->validator) (-cached (rf) :validator (fn [_] (->validator)))
+                       :else (->validator))))))
            (-explainer [_ path]
              (let [explainer (-memoize (fn [] (-explainer (rf) (into path [0 0]))))]
                (fn [x in acc] ((explainer) x in acc))))
@@ -2075,7 +2079,11 @@
                 raw (-to-value-ast this)
                 :else (-to-child-ast this)))
             Schema
-            (-validator [_] (-validator child))
+            ;; a registry pointer shares its target's cached validator; inside a
+            ;; recursive ref's knot the compile closes over the knot, so it is not shared
+            (-validator [_] (if (and id (empty? *ref-validators*))
+                              (-cached child :validator -validator)
+                              (-validator child)))
             (-explainer [_ path] (-explainer child (conj path 0)))
             (-parser [_] (-parser child))
             (-unparser [_] (-unparser child))
