@@ -2210,7 +2210,7 @@
           (-instrument-f [schema {:keys [scope report gen] :as props} f _options]
             (let [{:keys [min max input output guard]} (-function-info schema)
                   [validate-input validate-output] (-vmap -validator [input output])
-                  validate-guard (or (some-> guard -validator) any?)
+                  validate-guard (some-> guard -validator)
                   [wrap-input wrap-output wrap-guard] (-vmap #(contains? scope %) [:input :output :guard])
                   f (or (if gen (gen schema) f) (-fail! ::missing-function {:props props}))
                   ;; a throwing validator (e.g. a lazy ref that does not resolve) is reported, never f's error
@@ -2221,21 +2221,23 @@
                                 (catch #?(:clj Exception, :cljs :default) e
                                   (report ::invalid-schema-at-call
                                           (cond-> {:arm arm, arm ({:input input, :output output, :guard guard} arm)
-                                                   :args args, :schema schema, :exception e}
+                                                   :args (vec args), :schema schema, :exception e}
                                             (not= :input arm) (assoc :value value)))
                                   true)))]
+              ;; a passing call checks the rest args as given (a counted seq); the vector
+              ;; every report carries is built only when one is made
               (fn [& args]
-                (let [args (vec args), arity (count args)]
+                (let [args (or args []), arity (count args)]
                   (when wrap-input
                     (when-not (<= min arity (or max miu/+max-size+))
-                      (report ::invalid-arity {:arity arity, :arities #{{:min min :max max}}, :args args, :input input, :schema schema}))
+                      (report ::invalid-arity {:arity arity, :arities #{{:min min :max max}}, :args (vec args), :input input, :schema schema}))
                     (when-not (valid? :input validate-input args args nil)
-                      (report ::invalid-input {:input input, :args args, :schema schema})))
+                      (report ::invalid-input {:input input, :args (vec args), :schema schema})))
                   (let [value (apply f args)]
                     (when (and wrap-output (not (valid? :output validate-output value args value)))
-                      (report ::invalid-output {:output output, :value value, :args args, :schema schema}))
-                    (when (and wrap-guard (not (valid? :guard validate-guard [args value] args value)))
-                      (report ::invalid-guard {:guard guard, :value value, :args args, :schema schema}))
+                      (report ::invalid-output {:output output, :value value, :args (vec args), :schema schema}))
+                    (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [(vec args) value] args value)))
+                      (report ::invalid-guard {:guard guard, :value value, :args (vec args), :schema schema}))
                     value)))))
           Cached
           (-cache [_] cache)
@@ -2394,6 +2396,28 @@
 
 (defn- regex-validator [schema] (re/validator (-regex-validator schema)))
 
+(defn- -cat-items-validator
+  "A `:cat` whose children are all single items (no nested regex operator,
+  no `:ref`, which the regex path refuses as potentially recursive) matches
+  exactly the sequences of its length whose elements satisfy the children in
+  order. Checked without the regex driver, so a passing value allocates
+  nothing; the explainer stays the regex one."
+  [children]
+  (let [validators (object-array (map -validator children))
+        n (alength validators)]
+    (fn [x]
+      (boolean
+       (and (sequential? x)
+            (if (vector? x)
+              (and (== n (count x))
+                   (loop [i 0]
+                     (or (== i n)
+                         (and ((aget validators i) (nth x i)) (recur (unchecked-inc i))))))
+              (loop [i 0, s (seq x)]
+                (if (== i n)
+                  (nil? s)
+                  (and (some? s) ((aget validators i) (first s)) (recur (unchecked-inc i) (next s)))))))))))
+
 (defn- regex-explainer [schema path] (re/explainer schema path (-regex-explainer schema path)))
 
 (defn- regex-parser [schema] (re/parser (-regex-parser schema)))
@@ -2419,7 +2443,10 @@
         ^{:type ::schema}
         (reify
           Schema
-          (-validator [this] (regex-validator this))
+          (-validator [this]
+            (if (and (= :cat type) (not-any? #(or (-regex-op? %) (= :ref (-type (-parent %)))) children))
+              (-cat-items-validator children)
+              (regex-validator this)))
           (-explainer [this path] (regex-explainer this path))
           (-parser [this] (regex-parser this))
           (-unparser [this] (-regex-unparser this))
