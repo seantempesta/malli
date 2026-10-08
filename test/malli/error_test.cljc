@@ -965,3 +965,8 @@
   (is (= ["invalid type"] (me/humanize (m/explain [:map] []))))
   (is (= [["invalid type"]] (me/humanize (m/explain [:vector [:map]] [[]]))))
   (is (= [["invalid type"]] (me/humanize (m/explain [:vector [:fn {:error/path [-1]} (comp int? :foo)]] [[]])))))
+
+(deftest levenshtein-test
+  (is (= 0 (me/levenshtein "abc" "abc")))
+  (is (= 3 (me/levenshtein "kitten" "sitting")))
+  (is (= (me/levenshtein "kitten" "sitting") (me/levenshtein "sitting" "kitten"))))
