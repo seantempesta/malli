@@ -12,33 +12,51 @@
 (defn -filter-var [f] (fn [n s _] (f (-find-var n s))))
 (defn -filter-schema [f] (fn [_ _ {:keys [schema]}] (f schema)))
 
-(defn- -primitive-fn? [f]
+(defn primitive-fn?
+  "True when `f` is a function implementing a primitive-hinted `clojure.lang.IFn$...` interface."
+  [f]
   (and (fn? f) (boolean (some (fn [^Class c] (.startsWith (.getName c) "clojure.lang.IFn$")) (supers (class f))))))
+
+(defn- -strument-var!
+  [{:keys [mode filters gen report] :as options} n s d]
+  (when-let [v (-find-var n s)]
+    (when (and (bound? v)
+               (or (not (primitive-fn? @v))
+                   (println (str "WARNING: Not instrumenting primitive fn " v))))
+      (when (or (not filters) (some #(% n s d) filters))
+        (case mode
+          :instrument (let [dgen (as-> (merge (select-keys options [:scope :report :gen]) d) $
+                                   (cond-> $ report (update :report (fn [r] (fn [t data] (r t (assoc data :fn-name (symbol (name n) (name s))))))))
+                                   (cond (and gen (true? (:gen d))) (assoc $ :gen gen)
+                                         (true? (:gen d)) (dissoc $ :gen)
+                                         :else $))]
+                        (alter-var-root v (fn [f]
+                                            (when (primitive-fn? f)
+                                              (m/-fail! ::cannot-instrument-primitive-fn {:v v}))
+                                            (let [f (-f->original f)]
+                                              (-> (m/-instrument dgen f (select-keys options [:registry])) (with-meta {::original f}))))))
+          :unstrument (alter-var-root v -f->original)
+          (mode v d))
+        v))))
 
 (defn -strument!
   ([] (-strument! nil))
-  ([{:keys [mode data filters gen report] :or {mode :instrument, data (m/function-schemas)} :as options}]
-   (doall
-    (for [[n d] data, [s d] d]
-      (when-let [v (-find-var n s)]
-        (when (and (bound? v)
-                   (or (not (-primitive-fn? @v))
-                       (println (str "WARNING: Not instrumenting primitive fn " v))))
-          (when (or (not filters) (some #(% n s d) filters))
-            (case mode
-              :instrument (let [dgen (as-> (merge (select-keys options [:scope :report :gen]) d) $
-                                       (cond-> $ report (update :report (fn [r] (fn [t data] (r t (assoc data :fn-name (symbol (name n) (name s))))))))
-                                       (cond (and gen (true? (:gen d))) (assoc $ :gen gen)
-                                             (true? (:gen d)) (dissoc $ :gen)
-                                             :else $))]
-                            (alter-var-root v (fn [f]
-                                                (when (-primitive-fn? f)
-                                                  (m/-fail! ::cannot-instrument-primitive-fn {:v v}))
-                                                (let [f (-f->original f)]
-                                                  (-> (m/-instrument dgen f) (with-meta {::original f}))))))
-              :unstrument (alter-var-root v -f->original)
-              (mode v d))
-            v)))))))
+  ([{:keys [data] :or {data (m/function-schemas)} :as options}]
+   (let [options (merge {:mode :instrument} options)]
+     (doall (for [[n d] data, [s d] d] (-strument-var! options n s d))))))
+
+(defn -strument-each!
+  "Like `-strument!` (same options, including `:registry`) but continues past a failing Var.
+   Returns `{:instrumented [var ...] :failed [{:var var :exception throwable} ...]}`."
+  ([] (-strument-each! nil))
+  ([{:keys [data] :or {data (m/function-schemas)} :as options}]
+   (let [options (merge {:mode :instrument} options)]
+     (reduce (fn [acc [n s d]]
+               (try (cond-> acc (-strument-var! options n s d) (update :instrumented conj (-find-var n s)))
+                    (catch Throwable e
+                      (update acc :failed conj {:var (-find-var n s) :exception e}))))
+             {:instrumented [] :failed []}
+             (for [[n d] data, [s d] d] [n s d])))))
 
 (defn -schema [v]
   (let [{:keys [malli/schema arglists]} (meta v)]

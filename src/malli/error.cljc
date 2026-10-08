@@ -253,14 +253,16 @@
    [(inc (first previous))]
    (map vector previous (next previous) other-seq)))
 
-(defn- -levenshtein [sequence1 sequence2]
+(defn levenshtein
+  "Edit distance between two strings or sequences."
+  [sequence1 sequence2]
   (peek (reduce (fn [previous current] (-next-row previous current sequence2))
                 (map #(identity %2) (cons nil sequence2) (range))
                 sequence1)))
 
 (defn- -similar-key [ky ky2]
   (let [min-len (apply min (map (m/-comp count #(if (str/starts-with? % ":") (subs % 1) %) str) [ky ky2]))
-        dist (-levenshtein (str ky) (str ky2))]
+        dist (levenshtein (str ky) (str ky2))]
     (when (<= dist (-length->threshold min-len)) dist)))
 
 (defn- -likely-misspelled [keys known-keys key]
@@ -269,7 +271,7 @@
 
 (defn -most-similar-to [keys key known-keys]
   (->> (-likely-misspelled keys known-keys key)
-       (map (juxt #(-levenshtein (str %) (str key)) identity))
+       (map (juxt #(levenshtein (str %) (str key)) identity))
        (filter first)
        (sort-by first)
        (map second)

@@ -2,7 +2,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
-            [malli.instrument :as mi]))
+            [malli.instrument :as mi]
+            [malli.registry :as mr]))
 
 (defn plus [x] (inc x))
 (m/=> plus [:=> [:cat :int] [:int {:max 6}]])
@@ -159,3 +160,31 @@
   (m/=> reinstrumented [:-> [:= 1]])
   (instrument!)
   (is (= 1 (reinstrumented))))
+
+(defn reg-id [x] x)
+(defn bad-schema [x] x)
+
+(deftest strument-registry-and-each-test
+  (let [reg  (mr/composite-registry m/default-registry {::id :int})
+        data {'malli.instrument-test {'reg-id {:schema [:=> [:cat ::id] ::id]}}}
+        data2 {'malli.instrument-test {'bad-schema {:schema [:=> [:cat ::missing] :int]}
+                                       'reg-id {:schema [:=> [:cat ::id] ::id]}}}]
+    (try
+      (testing "the registry option reaches the compile"
+        (is (thrown? Exception (mi/-strument! {:data data})))
+        (is (= [#'reg-id] (vec (mi/-strument! {:data data :registry reg}))))
+        (is (thrown-with-msg? Exception #":malli.core/invalid-input" (reg-id "x")))
+        (is (= 1 (reg-id 1))))
+      (mi/-strument! {:data data :mode :unstrument})
+      (testing "-strument-each! continues past a failing Var and returns it"
+        (let [{:keys [instrumented failed]} (mi/-strument-each! {:data data2 :registry reg})]
+          (is (= [#'reg-id] instrumented))
+          (is (= [#'bad-schema] (map :var failed)))
+          (is (instance? Throwable (:exception (first failed))))
+          (is (thrown? Exception (reg-id "x")))))
+      (finally (mi/-strument! {:data data2 :mode :unstrument})))))
+
+(deftest primitive-fn?-test
+  (is (true? (mi/primitive-fn? (fn ^long [^long x] x))))
+  (is (false? (mi/primitive-fn? (fn [x] x))))
+  (is (false? (mi/primitive-fn? :kw))))

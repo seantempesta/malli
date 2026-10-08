@@ -943,3 +943,8 @@
                                                                   (negated "should not avoid being a multiple of 3")
                                                                   "should not be a multiple of 3"))}}
                                           #(not= 0 (mod % 3))]] 1))))))
+
+(deftest levenshtein-test
+  (is (= 0 (me/levenshtein "abc" "abc")))
+  (is (= 3 (me/levenshtein "kitten" "sitting")))
+  (is (= (me/levenshtein "kitten" "sitting") (me/levenshtein "sitting" "kitten"))))
