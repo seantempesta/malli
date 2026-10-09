@@ -947,4 +947,14 @@
 (deftest levenshtein-test
   (is (= 0 (me/levenshtein "abc" "abc")))
   (is (= 3 (me/levenshtein "kitten" "sitting")))
-  (is (= (me/levenshtein "kitten" "sitting") (me/levenshtein "sitting" "kitten"))))
+  (is (= (me/levenshtein "kitten" "sitting") (me/levenshtein "sitting" "kitten")))
+  (testing "empty inputs"
+    (is (= 0 (me/levenshtein "" "")))
+    (is (= 0 (me/levenshtein [] nil)))
+    (is (= 3 (me/levenshtein "" "abc")))
+    (is (= 3 (me/levenshtein "abc" ""))))
+  (testing "sequences compare elements with ="
+    (is (= 2 (me/levenshtein [:a :b 1 2 "x"] '(:a 1 2 "y"))))
+    (is (= (me/levenshtein "flaw" "lawn") (me/levenshtein (seq "flaw") (vec "lawn")))))
+  (testing "a long pair"
+    (is (= 3 (me/levenshtein "source-of-a-misspelled-name" "sourse-of-a-mispelled-nam")))))

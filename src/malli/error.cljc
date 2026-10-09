@@ -245,20 +245,29 @@
 (defn- -length->threshold [len]
   (condp #(<= %2 %1) len, 2 0, 5 1, 6 2, 11 3, 20 4 (int (* 0.2 len))))
 
-(defn- -next-row [previous current other-seq]
-  (reduce
-   (fn [row [diagonal above other]]
-     (let [update-val (if (= other current) diagonal (inc (min diagonal above (peek row))))]
-       (conj row update-val)))
-   [(inc (first previous))]
-   (map vector previous (next previous) other-seq)))
-
 (defn levenshtein
-  "Edit distance between two strings or sequences."
+  "Edit distance between two strings or sequences: the fewest single-element
+  insertions, deletions and substitutions turning one into the other, with
+  elements compared by `=`. Two rows of the dynamic-programming table, kept in
+  primitive arrays, are all it allocates."
   [sequence1 sequence2]
-  (peek (reduce (fn [previous current] (-next-row previous current sequence2))
-                (map #(identity %2) (cons nil sequence2) (range))
-                sequence1)))
+  (let [s1 (if (string? sequence1) sequence1 (vec sequence1))
+        s2 (if (string? sequence2) sequence2 (vec sequence2))
+        n (count s1)
+        m (count s2)
+        first-row (int-array (inc m))]
+    (dotimes [j (inc m)] (aset first-row j (int j)))
+    (loop [i 0, ^ints previous first-row, ^ints current (int-array (inc m))]
+      (if (== i n)
+        (aget previous m)
+        (let [x (nth s1 i)]
+          (aset current 0 (int (inc i)))
+          (dotimes [j m]
+            (aset current (inc j)
+                  (if (= x (nth s2 j))
+                    (aget previous j)
+                    (int (inc (min (aget previous j) (min (aget previous (inc j)) (aget current j))))))))
+          (recur (inc i) current previous))))))
 
 (defn- -similar-key [ky ky2]
   (let [min-len (apply min (map (m/-comp count #(if (str/starts-with? % ":") (subs % 1) %) str) [ky ky2]))
