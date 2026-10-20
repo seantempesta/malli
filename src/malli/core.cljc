@@ -2226,19 +2226,125 @@
                                   true)))]
               ;; a passing call checks the rest args as given (a counted seq); the vector
               ;; every report carries is built only when one is made
-              (fn [& args]
-                (let [args (or args []), arity (count args)]
-                  (when wrap-input
-                    (when-not (<= min arity (or max miu/+max-size+))
-                      (report ::invalid-arity {:arity arity, :arities #{{:min min :max max}}, :args (vec args), :input input, :schema schema}))
-                    (when-not (valid? :input validate-input args args nil)
-                      (report ::invalid-input {:input input, :args (vec args), :schema schema})))
-                  (let [value (apply f args)]
-                    (when (and wrap-output (not (valid? :output validate-output value args value)))
-                      (report ::invalid-output {:output output, :value value, :args (vec args), :schema schema}))
-                    (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [(vec args) value] args value)))
-                      (report ::invalid-guard {:guard guard, :value value, :args (vec args), :schema schema}))
-                    value)))))
+              (let [generic
+                    (fn [& args]
+                      (let [args (or args []), arity (count args)]
+                        (when wrap-input
+                          (when-not (<= min arity (or max miu/+max-size+))
+                            (report ::invalid-arity {:arity arity, :arities #{{:min min :max max}}, :args (vec args), :input input, :schema schema}))
+                          (when-not (valid? :input validate-input args args nil)
+                            (report ::invalid-input {:input input, :args (vec args), :schema schema})))
+                        (let [value (apply f args)]
+                          (when (and wrap-output (not (valid? :output validate-output value args value)))
+                            (report ::invalid-output {:output output, :value value, :args (vec args), :schema schema}))
+                          (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [(vec args) value] args value)))
+                            (report ::invalid-guard {:guard guard, :value value, :args (vec args), :schema schema}))
+                          value)))
+                    ;; A fixed arity (a :cat of n plain items, n <= 4) gets a wrapper of that
+                    ;; arity: no rest seq, no apply, each argument checked by its own item's
+                    ;; validator (what the :cat validator decides for exactly n plain items).
+                    ;; Any other arity goes to the generic wrapper, which reports it.
+                    items (when (and (= min max) (<= min 4) (= :cat (-type (-parent input))))
+                            (let [cs (-children input)]
+                              (when (and (= (count cs) min) (not-any? -regex-op? cs))
+                                (-vmap -validator cs))))
+                    ]
+                (if-not (and items (not gen))
+                  generic
+                  (case (count items)
+                    0 (fn ([]
+                           (let [value (f)]
+                             (when (and wrap-output (not (try (validate-output value)
+                                                            (catch #?(:clj Exception, :cljs :default) e
+                                                              (report ::invalid-schema-at-call {:arm :output, :output output, :args [], :value value, :schema schema, :exception e})
+                                                              true))))
+                               (report ::invalid-output {:output output, :value value, :args [], :schema schema}))
+                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[] value] [] value)))
+                               (report ::invalid-guard {:guard guard, :value value, :args [], :schema schema}))
+                             value))
+                          ([& more] (apply generic more)))
+                    1 (let [[v0] items]
+                        (fn ([] (generic))
+                          ([a]
+                           (when wrap-input
+                             (when-not (try (v0 a)
+                                            (catch #?(:clj Exception, :cljs :default) e
+                                              (report ::invalid-schema-at-call {:arm :input, :input input, :args [a], :schema schema, :exception e})
+                                              true))
+                               (report ::invalid-input {:input input, :args [a], :schema schema})))
+                           (let [value (f a)]
+                             (when (and wrap-output (not (try (validate-output value)
+                                                            (catch #?(:clj Exception, :cljs :default) e
+                                                              (report ::invalid-schema-at-call {:arm :output, :output output, :args [a], :value value, :schema schema, :exception e})
+                                                              true))))
+                               (report ::invalid-output {:output output, :value value, :args [a], :schema schema}))
+                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a] value] [a] value)))
+                               (report ::invalid-guard {:guard guard, :value value, :args [a], :schema schema}))
+                             value))
+                          ([a & more] (apply generic a more))))
+                    2 (let [[v0 v1] items]
+                        (fn ([] (generic))
+                          ([a] (generic a))
+                          ([a b]
+                           (when wrap-input
+                             (when-not (try (and (v0 a) (v1 b))
+                                            (catch #?(:clj Exception, :cljs :default) e
+                                              (report ::invalid-schema-at-call {:arm :input, :input input, :args [a b], :schema schema, :exception e})
+                                              true))
+                               (report ::invalid-input {:input input, :args [a b], :schema schema})))
+                           (let [value (f a b)]
+                             (when (and wrap-output (not (try (validate-output value)
+                                                            (catch #?(:clj Exception, :cljs :default) e
+                                                              (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b], :value value, :schema schema, :exception e})
+                                                              true))))
+                               (report ::invalid-output {:output output, :value value, :args [a b], :schema schema}))
+                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b] value] [a b] value)))
+                               (report ::invalid-guard {:guard guard, :value value, :args [a b], :schema schema}))
+                             value))
+                          ([a b & more] (apply generic a b more))))
+                    3 (let [[v0 v1 v2] items]
+                        (fn ([] (generic))
+                          ([a] (generic a))
+                          ([a b] (generic a b))
+                          ([a b c]
+                           (when wrap-input
+                             (when-not (try (and (v0 a) (v1 b) (v2 c))
+                                            (catch #?(:clj Exception, :cljs :default) e
+                                              (report ::invalid-schema-at-call {:arm :input, :input input, :args [a b c], :schema schema, :exception e})
+                                              true))
+                               (report ::invalid-input {:input input, :args [a b c], :schema schema})))
+                           (let [value (f a b c)]
+                             (when (and wrap-output (not (try (validate-output value)
+                                                            (catch #?(:clj Exception, :cljs :default) e
+                                                              (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b c], :value value, :schema schema, :exception e})
+                                                              true))))
+                               (report ::invalid-output {:output output, :value value, :args [a b c], :schema schema}))
+                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b c] value] [a b c] value)))
+                               (report ::invalid-guard {:guard guard, :value value, :args [a b c], :schema schema}))
+                             value))
+                          ([a b c & more] (apply generic a b c more))))
+                    4 (let [[v0 v1 v2 v3] items]
+                        (fn ([] (generic))
+                          ([a] (generic a))
+                          ([a b] (generic a b))
+                          ([a b c] (generic a b c))
+                          ([a b c d]
+                           (when wrap-input
+                             (when-not (try (and (v0 a) (v1 b) (v2 c) (v3 d))
+                                            (catch #?(:clj Exception, :cljs :default) e
+                                              (report ::invalid-schema-at-call {:arm :input, :input input, :args [a b c d], :schema schema, :exception e})
+                                              true))
+                               (report ::invalid-input {:input input, :args [a b c d], :schema schema})))
+                           (let [value (f a b c d)]
+                             (when (and wrap-output (not (try (validate-output value)
+                                                            (catch #?(:clj Exception, :cljs :default) e
+                                                              (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b c d], :value value, :schema schema, :exception e})
+                                                              true))))
+                               (report ::invalid-output {:output output, :value value, :args [a b c d], :schema schema}))
+                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b c d] value] [a b c d] value)))
+                               (report ::invalid-guard {:guard guard, :value value, :args [a b c d], :schema schema}))
+                             value))
+                          ([a b c d & more] (apply generic a b c d more)))))))))
           Cached
           (-cache [_] cache)
           LensSchema
