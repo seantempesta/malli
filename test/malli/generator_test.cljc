@@ -1140,3 +1140,13 @@
 
 (deftest empty?-generator-test
   (is (every? empty? (mg/sample empty?))))
+
+(deftest function-checker-seed-test
+  (testing "one ::mg/=>seed draws the same cases: two checks shrink the same failing case, and the failure names its seed"
+    (let [check #(mg/check [:=> [:cat :int] :int] (fn [x] (if (> x 10) "big" x)) {::mg/=>seed %})
+          [a b] [(check 2026) (check 2026)]
+          shrunk (fn [r] (-> r :errors first :check (dissoc :malli.core/result :time-shrinking-ms)))
+          smallest (comp :smallest shrunk)]
+      (is (some? (smallest a)))
+      (is (= (shrunk a) (shrunk b)))
+      (is (= 2026 (-> a :errors first :check ::mg/seed))))))

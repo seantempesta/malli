@@ -539,7 +539,7 @@
 
 (defn function-checker
   ([?schema] (function-checker ?schema nil))
-  ([?schema {::keys [=>iterations] :or {=>iterations 100} :as options}]
+  ([?schema {::keys [=>iterations =>seed] :or {=>iterations 100} :as options}]
    (let [schema (m/schema ?schema options)
          -try (fn [f] (try [(f) true] (catch #?(:clj Exception, :cljs js/Error) e [e false])))
          check (fn [schema]
@@ -549,15 +549,15 @@
                        valid-guard? (if guard (m/validator guard options) (constantly true))
                        validate (fn [f args] (as-> (apply f args) $ (and (valid-output? $) (valid-guard? [args $]))))]
                    (fn [f]
-                     (let [{:keys [result shrunk]} (->> (prop/for-all* [input-generator] #(validate f %))
-                                                        (check/quick-check =>iterations))
+                     (let [{:keys [result shrunk seed]} (check/quick-check =>iterations (prop/for-all* [input-generator] #(validate f %))
+                                                                           :seed =>seed)
                            smallest (-> shrunk :smallest first)]
                        (when-not (true? result)
                          (let [explain-input (m/explain input smallest)
                                [result success] (when-not explain-input (-try (fn [] (apply f smallest))))
                                explain-output (when (and success (not explain-input)) (m/explain output result))
                                explain-guard (when (and success guard (not explain-output)) (m/explain guard [smallest result]))]
-                           (cond-> (assoc shrunk ::m/result result)
+                           (cond-> (assoc shrunk ::m/result result ::seed seed)
                              explain-input (assoc ::m/explain-input explain-input)
                              explain-output (assoc ::m/explain-output explain-output)
                              explain-guard (assoc ::m/explain-guard explain-guard)
