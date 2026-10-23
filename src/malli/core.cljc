@@ -2142,27 +2142,36 @@
             #?@(:cljs [IPrintWithWriter (-pr-writer [this writer opts] (pr-writer-schema this writer opts))]))))
       #?@(:cljs [IPrintWithWriter (-pr-writer [this writer opts] (pr-writer-into-schema this writer opts))]))))
 
-;; A schema is total when its validator cannot throw: every node a type known to answer
-;; true or false for any value (a predicate schema, named by its symbol, included), or one
-;; options name (::total-types: a registry's own predicates); a named reference is followed. A
-;; :ref resolves lazily, and a :fn or a comparator calls user code or compares what it is
-;; given, so neither is total.
+;; A schema is total when its validator cannot throw on a realized value: every node a type
+;; known to answer true or false for any such value (the built-ins below, malli's own predicate
+;; and comparator schemas, which answer through -safe-pred or a core predicate), or a type
+;; options name (::total-types: a registry's own predicates); a named reference is followed. Not
+;; total: a :ref (it resolves lazily), a :fn (user code: malli catches its throw, at a try per
+;; call), a user's simple schema no option names, and a function schema when a
+;; ::function-checker is set (it runs the function). Realizing a lazy seq an argument holds can
+;; still throw inside a sequence check: that throw is the caller's, as when the function reads it.
 (def -total-types
   #{:any :some :nil :string :int :float :double :boolean :keyword :qualified-keyword :symbol :qualified-symbol
     :uuid :map :map-of :vector :sequential :set :tuple :cat :catn :? :* :+ :repeat :alt :altn :maybe :or :orn
-    :and :not :enum := :not= :=> :-> :function :re ::schema ::val})
+    :and :not :enum := :not= :> :>= :< :<= :re ::schema ::val})
+
+(declare predicate-schemas)
+;; malli's predicate schemas by name, but pos?, neg? and zero?: they are registered bare and
+;; throw on a value that is no number
+(def ^:private -predicate-types (delay (into #{} (remove '#{pos? neg? zero?}) (filter symbol? (keys (predicate-schemas))))))
 
 (defn -total? [schema options]
   (if (nil? schema)
     true
-    (let [total (into -total-types (::total-types options))]
+    (let [total (cond-> (into (into -total-types @-predicate-types) (::total-types options))
+                  (nil? (::function-checker options)) (into [:=> :-> :function]))]
       (true? (-walk schema
                     (reify Walker
                       (-accept [_ _ _ _] true)
                       (-inner [this s p options] (-walk s this p options))
                       (-outer [_ s _ children _]
                         (let [t (-type (-parent s))]
-                          (and (or (contains? total t) (symbol? t))
+                          (and (contains? total t)
                                (not-any? #(false? (if (vector? %) (peek %) %)) children)))))
                     []
                     (assoc options ::walk-schema-refs true ::walk-entry-vals true))))))
@@ -2244,8 +2253,8 @@
                   ;; a throwing validator (e.g. a lazy ref that does not resolve) is reported, never f's error
                   ;; the report carries the arm's schema and checked values, as the matching invalid report would;
                   ;; built only on the throw, so a passing call allocates nothing
-                  valid? (fn [arm validate x args value]
-                           (if ({:input in-total? :output out-total? :guard guard-total?} arm)
+                  valid? (fn [arm total? validate x args value]
+                           (if total?
                              (validate x)
                              (try (validate x)
                                 (catch #?(:clj Exception, :cljs :default) e
@@ -2262,12 +2271,12 @@
                         (when wrap-input
                           (when-not (<= min arity (or max miu/+max-size+))
                             (report ::invalid-arity {:arity arity, :arities #{{:min min :max max}}, :args (vec args), :input input, :schema schema}))
-                          (when-not (valid? :input validate-input args args nil)
+                          (when-not (valid? :input in-total? validate-input args args nil)
                             (report ::invalid-input {:input input, :args (vec args), :schema schema})))
                         (let [value (apply f args)]
-                          (when (and wrap-output (not (valid? :output validate-output value args value)))
+                          (when (and wrap-output (not (valid? :output out-total? validate-output value args value)))
                             (report ::invalid-output {:output output, :value value, :args (vec args), :schema schema}))
-                          (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [(vec args) value] args value)))
+                          (when (and wrap-guard validate-guard (not (valid? :guard guard-total? validate-guard [(vec args) value] args value)))
                             (report ::invalid-guard {:guard guard, :value value, :args (vec args), :schema schema}))
                           value)))
                     ;; A fixed arity (a :cat of n plain items, n <= 4) gets a wrapper of that
@@ -2289,7 +2298,7 @@
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [], :value value, :schema schema, :exception e})
                                                               true)))))
                                (report ::invalid-output {:output output, :value value, :args [], :schema schema}))
-                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[] value] [] value)))
+                             (when (and wrap-guard validate-guard (not (valid? :guard guard-total? validate-guard [[] value] [] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [], :schema schema}))
                              value))
                           ([& more] (apply generic more)))
@@ -2308,7 +2317,7 @@
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a], :value value, :schema schema, :exception e})
                                                               true)))))
                                (report ::invalid-output {:output output, :value value, :args [a], :schema schema}))
-                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a] value] [a] value)))
+                             (when (and wrap-guard validate-guard (not (valid? :guard guard-total? validate-guard [[a] value] [a] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a], :schema schema}))
                              value))
                           ([a & more] (apply generic a more))))
@@ -2328,7 +2337,7 @@
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b], :value value, :schema schema, :exception e})
                                                               true)))))
                                (report ::invalid-output {:output output, :value value, :args [a b], :schema schema}))
-                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b] value] [a b] value)))
+                             (when (and wrap-guard validate-guard (not (valid? :guard guard-total? validate-guard [[a b] value] [a b] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a b], :schema schema}))
                              value))
                           ([a b & more] (apply generic a b more))))
@@ -2349,7 +2358,7 @@
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b c], :value value, :schema schema, :exception e})
                                                               true)))))
                                (report ::invalid-output {:output output, :value value, :args [a b c], :schema schema}))
-                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b c] value] [a b c] value)))
+                             (when (and wrap-guard validate-guard (not (valid? :guard guard-total? validate-guard [[a b c] value] [a b c] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a b c], :schema schema}))
                              value))
                           ([a b c & more] (apply generic a b c more))))
@@ -2371,7 +2380,7 @@
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b c d], :value value, :schema schema, :exception e})
                                                               true)))))
                                (report ::invalid-output {:output output, :value value, :args [a b c d], :schema schema}))
-                             (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b c d] value] [a b c d] value)))
+                             (when (and wrap-guard validate-guard (not (valid? :guard guard-total? validate-guard [[a b c d] value] [a b c d] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a b c d], :schema schema}))
                              value))
                           ([a b c d & more] (apply generic a b c d more)))))))))
