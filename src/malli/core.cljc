@@ -2142,6 +2142,31 @@
             #?@(:cljs [IPrintWithWriter (-pr-writer [this writer opts] (pr-writer-schema this writer opts))]))))
       #?@(:cljs [IPrintWithWriter (-pr-writer [this writer opts] (pr-writer-into-schema this writer opts))]))))
 
+;; A schema is total when its validator cannot throw: every node a type known to answer
+;; true or false for any value (a predicate schema, named by its symbol, included), or one
+;; options name (::total-types: a registry's own predicates); a named reference is followed. A
+;; :ref resolves lazily, and a :fn or a comparator calls user code or compares what it is
+;; given, so neither is total.
+(def -total-types
+  #{:any :some :nil :string :int :float :double :boolean :keyword :qualified-keyword :symbol :qualified-symbol
+    :uuid :map :map-of :vector :sequential :set :tuple :cat :catn :? :* :+ :repeat :alt :altn :maybe :or :orn
+    :and :not :enum := :not= :=> :-> :function :re ::schema ::val})
+
+(defn -total? [schema options]
+  (if (nil? schema)
+    true
+    (let [total (into -total-types (::total-types options))]
+      (true? (-walk schema
+                    (reify Walker
+                      (-accept [_ _ _ _] true)
+                      (-inner [this s p options] (-walk s this p options))
+                      (-outer [_ s _ children _]
+                        (let [t (-type (-parent s))]
+                          (and (or (contains? total t) (symbol? t))
+                               (not-any? #(false? (if (vector? %) (peek %) %)) children)))))
+                    []
+                    (assoc options ::walk-schema-refs true ::walk-entry-vals true))))))
+
 (defn -=>-schema []
   ^{:type ::into-schema}
   (reify
@@ -2207,23 +2232,28 @@
                        :output output}
                 guard (assoc :guard guard)
                 max (assoc :max max))))
-          (-instrument-f [schema {:keys [scope report gen] :as props} f _options]
+          (-instrument-f [schema {:keys [scope report gen] :as props} f options]
             (let [{:keys [min max input output guard]} (-function-info schema)
                   [validate-input validate-output] (-vmap -validator [input output])
                   validate-guard (some-> guard -validator)
+                  ;; an arm whose validator cannot throw (-total?) is checked bare; only the
+                  ;; others pay a try per call (a non-local escape: ~160 B on Jolt)
+                  [in-total? out-total? guard-total?] (-vmap #(-total? % options) [input output guard])
                   [wrap-input wrap-output wrap-guard] (-vmap #(contains? scope %) [:input :output :guard])
                   f (or (if gen (gen schema) f) (-fail! ::missing-function {:props props}))
                   ;; a throwing validator (e.g. a lazy ref that does not resolve) is reported, never f's error
                   ;; the report carries the arm's schema and checked values, as the matching invalid report would;
                   ;; built only on the throw, so a passing call allocates nothing
                   valid? (fn [arm validate x args value]
-                           (try (validate x)
+                           (if ({:input in-total? :output out-total? :guard guard-total?} arm)
+                             (validate x)
+                             (try (validate x)
                                 (catch #?(:clj Exception, :cljs :default) e
                                   (report ::invalid-schema-at-call
                                           (cond-> {:arm arm, arm ({:input input, :output output, :guard guard} arm)
                                                    :args (vec args), :schema schema, :exception e}
                                             (not= :input arm) (assoc :value value)))
-                                  true)))]
+                                  true))))]
               ;; a passing call checks the rest args as given (a counted seq); the vector
               ;; every report carries is built only when one is made
               (let [generic
@@ -2254,10 +2284,10 @@
                   (case (count items)
                     0 (fn ([]
                            (let [value (f)]
-                             (when (and wrap-output (not (try (validate-output value)
+                             (when (and wrap-output (not (if out-total? (validate-output value) (try (validate-output value)
                                                             (catch #?(:clj Exception, :cljs :default) e
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [], :value value, :schema schema, :exception e})
-                                                              true))))
+                                                              true)))))
                                (report ::invalid-output {:output output, :value value, :args [], :schema schema}))
                              (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[] value] [] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [], :schema schema}))
@@ -2267,16 +2297,16 @@
                         (fn ([] (generic))
                           ([a]
                            (when wrap-input
-                             (when-not (try (v0 a)
+                             (when-not (if in-total? (v0 a) (try (v0 a)
                                             (catch #?(:clj Exception, :cljs :default) e
                                               (report ::invalid-schema-at-call {:arm :input, :input input, :args [a], :schema schema, :exception e})
-                                              true))
+                                              true)))
                                (report ::invalid-input {:input input, :args [a], :schema schema})))
                            (let [value (f a)]
-                             (when (and wrap-output (not (try (validate-output value)
+                             (when (and wrap-output (not (if out-total? (validate-output value) (try (validate-output value)
                                                             (catch #?(:clj Exception, :cljs :default) e
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a], :value value, :schema schema, :exception e})
-                                                              true))))
+                                                              true)))))
                                (report ::invalid-output {:output output, :value value, :args [a], :schema schema}))
                              (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a] value] [a] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a], :schema schema}))
@@ -2287,16 +2317,16 @@
                           ([a] (generic a))
                           ([a b]
                            (when wrap-input
-                             (when-not (try (and (v0 a) (v1 b))
+                             (when-not (if in-total? (and (v0 a) (v1 b)) (try (and (v0 a) (v1 b))
                                             (catch #?(:clj Exception, :cljs :default) e
                                               (report ::invalid-schema-at-call {:arm :input, :input input, :args [a b], :schema schema, :exception e})
-                                              true))
+                                              true)))
                                (report ::invalid-input {:input input, :args [a b], :schema schema})))
                            (let [value (f a b)]
-                             (when (and wrap-output (not (try (validate-output value)
+                             (when (and wrap-output (not (if out-total? (validate-output value) (try (validate-output value)
                                                             (catch #?(:clj Exception, :cljs :default) e
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b], :value value, :schema schema, :exception e})
-                                                              true))))
+                                                              true)))))
                                (report ::invalid-output {:output output, :value value, :args [a b], :schema schema}))
                              (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b] value] [a b] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a b], :schema schema}))
@@ -2308,16 +2338,16 @@
                           ([a b] (generic a b))
                           ([a b c]
                            (when wrap-input
-                             (when-not (try (and (v0 a) (v1 b) (v2 c))
+                             (when-not (if in-total? (and (v0 a) (v1 b) (v2 c)) (try (and (v0 a) (v1 b) (v2 c))
                                             (catch #?(:clj Exception, :cljs :default) e
                                               (report ::invalid-schema-at-call {:arm :input, :input input, :args [a b c], :schema schema, :exception e})
-                                              true))
+                                              true)))
                                (report ::invalid-input {:input input, :args [a b c], :schema schema})))
                            (let [value (f a b c)]
-                             (when (and wrap-output (not (try (validate-output value)
+                             (when (and wrap-output (not (if out-total? (validate-output value) (try (validate-output value)
                                                             (catch #?(:clj Exception, :cljs :default) e
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b c], :value value, :schema schema, :exception e})
-                                                              true))))
+                                                              true)))))
                                (report ::invalid-output {:output output, :value value, :args [a b c], :schema schema}))
                              (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b c] value] [a b c] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a b c], :schema schema}))
@@ -2330,16 +2360,16 @@
                           ([a b c] (generic a b c))
                           ([a b c d]
                            (when wrap-input
-                             (when-not (try (and (v0 a) (v1 b) (v2 c) (v3 d))
+                             (when-not (if in-total? (and (v0 a) (v1 b) (v2 c) (v3 d)) (try (and (v0 a) (v1 b) (v2 c) (v3 d))
                                             (catch #?(:clj Exception, :cljs :default) e
                                               (report ::invalid-schema-at-call {:arm :input, :input input, :args [a b c d], :schema schema, :exception e})
-                                              true))
+                                              true)))
                                (report ::invalid-input {:input input, :args [a b c d], :schema schema})))
                            (let [value (f a b c d)]
-                             (when (and wrap-output (not (try (validate-output value)
+                             (when (and wrap-output (not (if out-total? (validate-output value) (try (validate-output value)
                                                             (catch #?(:clj Exception, :cljs :default) e
                                                               (report ::invalid-schema-at-call {:arm :output, :output output, :args [a b c d], :value value, :schema schema, :exception e})
-                                                              true))))
+                                                              true)))))
                                (report ::invalid-output {:output output, :value value, :args [a b c d], :schema schema}))
                              (when (and wrap-guard validate-guard (not (valid? :guard validate-guard [[a b c d] value] [a b c d] value)))
                                (report ::invalid-guard {:guard guard, :value value, :args [a b c d], :schema schema}))
