@@ -1530,13 +1530,17 @@
                 (-to-ast [this _] (-to-child-ast this))
                 Schema
                 (-validator [_]
-                  (let [validator (-validator schema)]
-                    (fn [x] (and (fpred x)
-                                 (validate-limits x)
-                                 (reduce (fn [acc v] (if (validator v) acc (reduced false))) true
-                                         (cond->> x
-                                           (and bounded (not (-safely-countable? x)))
-                                           (eduction (take bounded))))))))
+                  (if (= :any (-type (-parent schema)))
+                    ;; an :any child accepts every element, so there is nothing to ask of them: the collection's own
+                    ;; predicate and limits are the whole check, and a lazy seq is not realized by it
+                    (fn [x] (and (fpred x) (validate-limits x)))
+                    (let [validator (-validator schema)]
+                      (fn [x] (and (fpred x)
+                                   (validate-limits x)
+                                   (reduce (fn [acc v] (if (validator v) acc (reduced false))) true
+                                           (cond->> x
+                                             (and bounded (not (-safely-countable? x)))
+                                             (eduction (take bounded)))))))))
                 (-explainer [this path]
                   (let [explainer (-explainer schema (conj path 0))]
                     (fn [x in acc]
