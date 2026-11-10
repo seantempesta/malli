@@ -1993,13 +1993,15 @@
                                                      (-validator (rf)))]
                                              (compare-and-set! knot nil f) ;; tie the knot (once), rec now callable
                                              @knot)))]
-                     (cond
-                       lazy #((->validator) %)
+                     (if (and (not lazy) (empty? id->validator))
                        ;; outside every knot the referenced schema's validator is a
                        ;; function of that schema instance alone: compile it once and
                        ;; share it with every schema that refers to it
-                       (empty? id->validator) (-cached (rf) :validator (fn [_] (->validator)))
-                       :else (->validator))))))
+                       (-cached (rf) :validator (fn [_] (->validator)))
+                       ;; inside a knot, compile on first use: compiled eagerly, a ref
+                       ;; reached by n paths is compiled n times, and each of those
+                       ;; compiles every ref below it again
+                       #((->validator) %))))))
            (-explainer [_ path]
              (let [explainer (-memoize (fn [] (-explainer (rf) (into path [0 0]))))]
                (fn [x in acc] ((explainer) x in acc))))

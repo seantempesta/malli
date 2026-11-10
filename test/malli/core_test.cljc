@@ -3459,6 +3459,42 @@
                                                           :var resolve}})
                (every? (m/validator $) (mg/sample schema))))))))
 
+(deftest ref-validator-compile-test
+  (let [compiles (atom 0)
+        -validator m/-validator
+        validator (fn [registry ?schema]
+                    (reset! compiles 0)
+                    (with-redefs [m/-validator (fn [schema]
+                                                 (when (= :tuple (m/type schema)) (swap! compiles inc))
+                                                 (-validator schema))]
+                      (let [f (m/validator [:schema {:registry registry} ?schema])]
+                        [f @compiles])))]
+
+    (testing "a ref reached by two paths is not compiled once per path"
+      ;; ::n0 reaches ::n1 by two paths, ::n1 reaches ::n2 by two, ... : 2^10 paths to ::n10
+      (let [registry (into {::n10 [:tuple :int [:maybe [:ref ::n0]]]}
+                           (for [i (range 10)]
+                             [(keyword "malli.core-test" (str "n" i))
+                              [:tuple [:ref (keyword "malli.core-test" (str "n" (inc i)))]
+                               [:ref (keyword "malli.core-test" (str "n" (inc i)))]]]))
+            [f n] (validator registry ::n0)
+            value (reduce (fn [v _] [v v]) [1 nil] (range 10))]
+        (is (<= n (count registry)))
+        (is (true? (f value)))
+        (is (true? (f (assoc-in value [0 0 0 0 0 0 0 0 0 0 1] value))))
+        (is (false? (f (assoc-in value [1 1 1 1 1 1 1 1 1 1 0] "1"))))
+        (is (false? (f (assoc-in value [0 1 0 1 0 1 0 1 0 1 1] [1 nil]))))))
+
+    (testing "mutual recursion"
+      (let [registry {::ping [:tuple [:= "ping"] [:maybe [:ref ::pong]]]
+                      ::pong [:tuple [:= "pong"] [:maybe [:ref ::ping]]]}
+            [f n] (validator registry ::ping)]
+        (is (<= n (count registry)))
+        (is (true? (f ["ping" ["pong" ["ping" nil]]])))
+        (is (false? (f ["ping" ["ping" nil]])))
+        (is (false? (f ["ping" ["pong" ["pong" nil]]])))
+        (is (true? (f ["ping" ["pong" ["ping" ["pong" nil]]]])))))))
+
 (deftest deref-recursive-test
   (let [schema [:schema {:registry {::user-id :uuid
                                     ::address [:map
